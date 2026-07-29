@@ -156,6 +156,164 @@ def gerar_resumo() -> str:
     return "\n".join(linhas)
 
 
+def aplicar_formatacao():
+    """Formata a planilha e cria abas de resumo."""
+    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
+    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    spreadsheet    = gc.open_by_key(spreadsheet_id)
+
+    # ── Aba principal ────────────────────────────────────────────────────────
+    try:
+        ws = spreadsheet.worksheet("Registro de Compras")
+    except gspread.WorksheetNotFound:
+        raise ValueError("Aba 'Registro de Compras' não encontrada.")
+
+    all_rows = ws.get_all_values()
+    last_row = max(len(all_rows), 1)
+
+    # Limpa linhas de TOTAL antigas (contém "TOTAL" na col A ou D)
+    for r in sorted(range(2, last_row + 1), reverse=True):
+        vals = ws.row_values(r)
+        if vals and "TOTAL" in str(vals[0]).upper():
+            ws.delete_rows(r)
+    all_rows = ws.get_all_values()
+    last_row = max(len(all_rows), 1)
+
+    # Cabeçalho
+    ws.update('A1:I1', [['#','Data','Fornecedor','Material / Produto',
+                          'Qtd','Unidade','Preço Unit. (R$)','Total (R$)','Nota Fiscal']])
+    ws.format('A1:I1', {
+        'backgroundColor': {'red': 0.122, 'green': 0.220, 'blue': 0.392},
+        'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 11},
+        'horizontalAlignment': 'CENTER', 'verticalAlignment': 'MIDDLE'
+    })
+
+    # Dados
+    if last_row > 1:
+        ws.format(f'A2:I{last_row}', {
+            'backgroundColor': {'red': 0.839, 'green': 0.894, 'blue': 0.941},
+            'textFormat': {'fontSize': 10}, 'verticalAlignment': 'MIDDLE'
+        })
+        ws.format(f'H2:H{last_row}', {
+            'backgroundColor': {'red': 0.886, 'green': 0.937, 'blue': 0.855},
+            'textFormat': {'bold': True},
+            'numberFormat': {'type': 'CURRENCY', 'pattern': 'R$ #,##0.00'},
+            'horizontalAlignment': 'RIGHT'
+        })
+        ws.format(f'G2:G{last_row}', {
+            'numberFormat': {'type': 'CURRENCY', 'pattern': 'R$ #,##0.00'},
+            'horizontalAlignment': 'RIGHT'
+        })
+        ws.format(f'B2:B{last_row}', {'numberFormat': {'type': 'DATE', 'pattern': 'dd/mm/yyyy'}, 'horizontalAlignment': 'CENTER'})
+        ws.format(f'A2:A{last_row}', {'horizontalAlignment': 'CENTER'})
+        ws.format(f'E2:F{last_row}', {'horizontalAlignment': 'CENTER'})
+        ws.format(f'I2:I{last_row}', {'horizontalAlignment': 'CENTER'})
+
+    # Congela cabeçalho
+    ws.freeze(rows=1)
+
+    # Larguras e altura via batch_update
+    sid = ws.id
+    col_widths = [45, 105, 185, 230, 55, 85, 140, 140, 125]
+    requests = [{'updateDimensionProperties': {
+        'range': {'sheetId': sid, 'dimension': 'COLUMNS', 'startIndex': i, 'endIndex': i+1},
+        'properties': {'pixelSize': w}, 'fields': 'pixelSize'
+    }} for i, w in enumerate(col_widths)]
+    requests.append({'updateDimensionProperties': {
+        'range': {'sheetId': sid, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': 1},
+        'properties': {'pixelSize': 42}, 'fields': 'pixelSize'
+    }})
+
+    # Linha de Total Geral
+    if last_row > 1:
+        t = last_row + 2
+        ws.update(f'A{t}', [['💰 TOTAL GERAL']])
+        ws.merge_cells(f'A{t}:G{t}')
+        ws.format(f'A{t}:G{t}', {
+            'backgroundColor': {'red': 0.122, 'green': 0.220, 'blue': 0.392},
+            'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 12},
+            'horizontalAlignment': 'CENTER', 'verticalAlignment': 'MIDDLE'
+        })
+        ws.update(f'H{t}', [[f'=SUM(H2:H{last_row})']], value_input_option='USER_ENTERED')
+        ws.format(f'H{t}', {
+            'backgroundColor': {'red': 0.180, 'green': 0.459, 'blue': 0.710},
+            'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 12},
+            'numberFormat': {'type': 'CURRENCY', 'pattern': 'R$ #,##0.00'},
+            'horizontalAlignment': 'RIGHT'
+        })
+        ws.format(f'I{t}', {'backgroundColor': {'red': 0.180, 'green': 0.459, 'blue': 0.710}})
+
+    spreadsheet.batch_update({'requests': requests})
+
+    # ── Resumos ──────────────────────────────────────────────────────────────
+    dados = ws.get_all_values()[1:]  # sem cabeçalho
+    dados = [r for r in dados if r and r[1]]  # linhas com data
+
+    def criar_resumo(nome, col_idx, titulo_col):
+        try:
+            old = spreadsheet.worksheet(nome)
+            spreadsheet.del_worksheet(old)
+        except Exception:
+            pass
+        s = spreadsheet.add_worksheet(nome, rows=200, cols=3)
+
+        unicos = sorted(set(r[col_idx] for r in dados if r[col_idx]))
+
+        s.update('A1', [[titulo_col]])
+        s.format('A1:C1', {
+            'backgroundColor': {'red': 0.122, 'green': 0.220, 'blue': 0.392},
+            'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 13},
+            'horizontalAlignment': 'CENTER'
+        })
+        s.merge_cells('A1:C1')
+
+        s.update('A2:C2', [[titulo_col, 'Qtd. Compras', 'Total Gasto (R$)']])
+        s.format('A2:C2', {
+            'backgroundColor': {'red': 0.180, 'green': 0.459, 'blue': 0.710},
+            'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 11},
+            'horizontalAlignment': 'CENTER'
+        })
+
+        src = "'Registro de Compras'"
+        col_letra = 'C' if col_idx == 2 else 'D'
+        rows_data = []
+        for u in unicos:
+            rows_data.append([u, f'=COUNTIF({src}!{col_letra}:{col_letra},A{len(rows_data)+3})',
+                               f'=SUMIF({src}!{col_letra}:{col_letra},A{len(rows_data)+3},{src}!H:H)'])
+        if rows_data:
+            s.update('A3', rows_data, value_input_option='USER_ENTERED')
+            n = len(rows_data)
+            s.format(f'A3:C{n+2}', {'textFormat': {'fontSize': 10}, 'verticalAlignment': 'MIDDLE'})
+            s.format(f'C3:C{n+2}', {
+                'backgroundColor': {'red': 0.886, 'green': 0.937, 'blue': 0.855},
+                'textFormat': {'bold': True},
+                'numberFormat': {'type': 'CURRENCY', 'pattern': 'R$ #,##0.00'},
+                'horizontalAlignment': 'RIGHT'
+            })
+            # Total
+            t2 = n + 4
+            s.update(f'A{t2}', [['TOTAL', '', f'=SUM(C3:C{n+2})']], value_input_option='USER_ENTERED')
+            s.merge_cells(f'A{t2}:B{t2}')
+            s.format(f'A{t2}:C{t2}', {
+                'backgroundColor': {'red': 0.122, 'green': 0.220, 'blue': 0.392},
+                'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}, 'fontSize': 12},
+                'numberFormat': {'type': 'CURRENCY', 'pattern': 'R$ #,##0.00'},
+                'horizontalAlignment': 'RIGHT'
+            })
+
+        sid2 = s.id
+        spreadsheet.batch_update({'requests': [
+            {'updateDimensionProperties': {'range': {'sheetId': sid2, 'dimension': 'COLUMNS', 'startIndex': 0, 'endIndex': 1}, 'properties': {'pixelSize': 230}, 'fields': 'pixelSize'}},
+            {'updateDimensionProperties': {'range': {'sheetId': sid2, 'dimension': 'COLUMNS', 'startIndex': 1, 'endIndex': 2}, 'properties': {'pixelSize': 120}, 'fields': 'pixelSize'}},
+            {'updateDimensionProperties': {'range': {'sheetId': sid2, 'dimension': 'COLUMNS', 'startIndex': 2, 'endIndex': 3}, 'properties': {'pixelSize': 160}, 'fields': 'pixelSize'}},
+        ]})
+        s.freeze(rows=2)
+
+    criar_resumo('🏭 Por Fornecedor', 2, 'Fornecedor')
+    criar_resumo('📦 Por Material',   3, 'Material / Produto')
+
+
 def ultimos_registros(n: int = 5) -> str:
     """Retorna os últimos N registros."""
     sheet = _get_sheet()
@@ -185,6 +343,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /adicionar – Registrar nova compra\n"
         "  /resumo    – Ver total gasto\n"
         "  /ultimas   – Ver últimas 5 compras\n"
+        "  /formatar  – Formatar planilha e criar resumos\n"
         "  /ajuda     – Mostrar esta mensagem"
     )
     await update.message.reply_text(texto, parse_mode="Markdown")
@@ -372,6 +531,26 @@ async def ultimas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 
+async def formatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⏳ Formatando planilha e criando resumos...\n_(pode levar 30 segundos)_",
+        parse_mode="Markdown"
+    )
+    try:
+        aplicar_formatacao()
+        await update.message.reply_text(
+            "✅ *Pronto!*\n\n"
+            "Sua planilha foi formatada e as abas foram criadas:\n"
+            "  🏭 *Por Fornecedor*\n"
+            "  📦 *Por Material*\n\n"
+            "Abra o Google Sheets para ver o resultado!",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Erro ao formatar: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ Erro ao formatar: {e}")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     if not BOT_TOKEN:
@@ -401,10 +580,11 @@ def main():
         confirmar_e_salvar,
     ))
     app.add_handler(conv)
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("ajuda",   ajuda))
-    app.add_handler(CommandHandler("resumo",  resumo))
-    app.add_handler(CommandHandler("ultimas", ultimas))
+    app.add_handler(CommandHandler("start",    start))
+    app.add_handler(CommandHandler("ajuda",    ajuda))
+    app.add_handler(CommandHandler("resumo",   resumo))
+    app.add_handler(CommandHandler("ultimas",  ultimas))
+    app.add_handler(CommandHandler("formatar", formatar))
 
     logger.info("🤖 Bot rodando...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
