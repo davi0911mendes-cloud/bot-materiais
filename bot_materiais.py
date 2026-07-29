@@ -275,14 +275,29 @@ def aplicar_formatacao():
             'horizontalAlignment': 'CENTER'
         })
 
-        src = "'Registro de Compras'"
-        col_letra = 'C' if col_idx == 2 else 'D'
+        # Calcula totais em Python (evita problemas de locale com fórmulas pt-BR)
+        def _parse_float(v):
+            try:
+                s_val = str(v).strip().replace('R$', '').replace(' ', '')
+                if ',' in s_val and '.' in s_val:
+                    s_val = s_val.replace('.', '').replace(',', '.')
+                elif ',' in s_val:
+                    s_val = s_val.replace(',', '.')
+                return float(s_val)
+            except (ValueError, TypeError):
+                return 0.0
+
         rows_data = []
+        total_geral = 0.0
         for u in unicos:
-            rows_data.append([u, f'=COUNTIF({src}!{col_letra}:{col_letra},A{len(rows_data)+3})',
-                               f'=SUMIF({src}!{col_letra}:{col_letra},A{len(rows_data)+3},{src}!H:H)'])
+            regs = [r for r in dados if r[col_idx] == u]
+            qtd  = len(regs)
+            tot  = sum(_parse_float(r[7]) for r in regs)
+            total_geral += tot
+            rows_data.append([u, qtd, tot])
+
         if rows_data:
-            s.update('A3', rows_data, value_input_option='USER_ENTERED')
+            s.update('A3', rows_data)
             n = len(rows_data)
             s.format(f'A3:C{n+2}', {'textFormat': {'fontSize': 10}, 'verticalAlignment': 'MIDDLE'})
             s.format(f'C3:C{n+2}', {
@@ -293,7 +308,7 @@ def aplicar_formatacao():
             })
             # Total
             t2 = n + 4
-            s.update(f'A{t2}', [['TOTAL', '', f'=SUM(C3:C{n+2})']], value_input_option='USER_ENTERED')
+            s.update(f'A{t2}', [['TOTAL', '', total_geral]])
             s.merge_cells(f'A{t2}:B{t2}')
             s.format(f'A{t2}:C{t2}', {
                 'backgroundColor': {'red': 0.122, 'green': 0.220, 'blue': 0.392},
