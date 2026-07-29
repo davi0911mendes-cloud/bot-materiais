@@ -340,6 +340,30 @@ def aplicar_formatacao():
         raise
 
 
+def limpar_planilha():
+    """Apaga todos os dados da planilha, mantendo apenas o cabeçalho."""
+    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
+    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    spreadsheet    = gc.open_by_key(spreadsheet_id)
+
+    # Limpa aba principal (mantém só o cabeçalho)
+    try:
+        ws = spreadsheet.worksheet("Registro de Compras")
+        last_row = ws.row_count
+        if last_row > 1:
+            ws.delete_rows(2, last_row)
+    except gspread.WorksheetNotFound:
+        pass
+
+    # Remove abas de resumo
+    for nome in ("Por Fornecedor", "Por Material"):
+        try:
+            spreadsheet.del_worksheet(spreadsheet.worksheet(nome))
+        except Exception:
+            pass
+
+
 def ultimos_registros(n: int = 5) -> str:
     """Retorna os últimos N registros."""
     sheet = _get_sheet()
@@ -370,6 +394,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /resumo    – Ver total gasto\n"
         "  /ultimas   – Ver últimas 5 compras\n"
         "  /formatar  – Formatar planilha e criar resumos\n"
+        "  /limpar    – Apagar todos os dados da planilha\n"
         "  /ajuda     – Mostrar esta mensagem"
     )
     await update.message.reply_text(texto, parse_mode="Markdown")
@@ -557,6 +582,34 @@ async def ultimas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 
+async def limpar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚠️ *Tem certeza?*\n\nIsso vai apagar *TODOS* os registros da planilha.\n\nDigite *CONFIRMAR* para continuar ou qualquer outra coisa para cancelar.",
+        parse_mode="Markdown"
+    )
+    context.user_data["aguardando_confirmacao_limpar"] = True
+
+
+async def confirmar_limpar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("aguardando_confirmacao_limpar"):
+        return
+    context.user_data.pop("aguardando_confirmacao_limpar", None)
+
+    if update.message.text.strip().upper() == "CONFIRMAR":
+        await update.message.reply_text("⏳ Limpando planilha...")
+        try:
+            limpar_planilha()
+            await update.message.reply_text(
+                "✅ *Planilha limpa!*\n\nTodos os dados foram apagados. O cabeçalho foi mantido.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Erro ao limpar: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ Erro ao limpar: {e}")
+    else:
+        await update.message.reply_text("🚫 Operação cancelada.")
+
+
 async def formatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "⏳ Formatando planilha e criando resumos...\n_(pode levar 30 segundos)_",
@@ -605,12 +658,17 @@ def main():
         filters.Regex(r"^(✅ Sim|✅ sim|sim|Sim|❌ Não|não|nao|Não)$"),
         confirmar_e_salvar,
     ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        confirmar_limpar,
+    ))
     app.add_handler(conv)
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("ajuda",    ajuda))
     app.add_handler(CommandHandler("resumo",   resumo))
     app.add_handler(CommandHandler("ultimas",  ultimas))
     app.add_handler(CommandHandler("formatar", formatar))
+    app.add_handler(CommandHandler("limpar",   limpar))
 
     logger.info("🤖 Bot rodando...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
