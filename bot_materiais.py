@@ -83,7 +83,12 @@ TECLADO_MATERIAIS = [
 # ── Google Sheets ────────────────────────────────────────────────────────────
 def _get_sheet():
     """Conecta ao Google Sheets e retorna a aba 'Registro de Compras'."""
-    creds_dict = json.loads(GOOGLE_CREDS)
+    # Lê a variável fresca a cada chamada (evita cache de startup)
+    creds_str = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    logger.info(f"[DIAG] GOOGLE_CREDENTIALS: {len(creds_str)} chars | início: {creds_str[:30]!r}")
+    if not creds_str:
+        raise ValueError("GOOGLE_CREDENTIALS está vazia no Railway!")
+    creds_dict = json.loads(creds_str)
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
