@@ -1,0 +1,6 @@
+# Não enviar credenciais para o GitHub
+*.json
+.env
+__pycache__/
+*.pyc
+*.xlsx
