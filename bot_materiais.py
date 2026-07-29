@@ -19,7 +19,6 @@ import logging
 from datetime import datetime
 
 import gspread
-from google.oauth2.service_account import Credentials
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -31,11 +30,6 @@ BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 GOOGLE_CREDS   = os.environ.get("GOOGLE_CREDENTIALS", "")
 
-SCOPES = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -44,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Estados do fluxo de conversa
-FORNECEDOR, MATERIAL, QUANTIDADE, UNIDADE, PRECO = range(5)
+FORNECEDOR, MATERIAL, QUANTIDADE, UNIDADE, PRECO, NOTA_FISCAL = range(6)
 
 # ── Listas padrão ────────────────────────────────────────────────────────────
 OUTRO_FORN = "✏️ Outro fornecedor"
@@ -89,18 +83,20 @@ def _get_sheet():
     if not creds_str:
         raise ValueError("GOOGLE_CREDENTIALS está vazia no Railway!")
     creds_dict = json.loads(creds_str)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
+    logger.info(f"[DIAG] SPREADSHEET_ID: {spreadsheet_id!r}")
+    # Usa service_account_from_dict (sem cache local) em vez de authorize()
+    gc = gspread.service_account_from_dict(creds_dict)
+    spreadsheet = gc.open_by_key(spreadsheet_id)
 
     # Cria a aba se não existir
     try:
         sheet = spreadsheet.worksheet("Registro de Compras")
     except gspread.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet("Registro de Compras", rows=1000, cols=8)
+        sheet = spreadsheet.add_worksheet("Registro de Compras", rows=1000, cols=9)
         sheet.append_row(
             ["#", "Data", "Fornecedor", "Material / Produto",
-             "Qtd", "Unidade", "Preço Unit. (R$)", "Total (R$)"],
+             "Qtd", "Unidade", "Preço Unit. (R$)", "Total (R$)", "Nota Fiscal"],
             value_input_option="USER_ENTERED",
         )
     return sheet
@@ -121,6 +117,7 @@ def salvar_registro(dados: dict) -> int:
         dados["unidade"],
         dados["preco"],
         total,
+        dados.get("nota_fiscal", "–"),
     ]
     sheet.append_row(linha, value_input_option="USER_ENTERED")
     return numero
@@ -282,8 +279,24 @@ async def receber_preco(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Preço inválido. Digite novamente (ex: 42.50):")
         return PRECO
 
+    await update.message.reply_text(
+        "🧾 *Número da Nota Fiscal?*\n_(ou toque em 'Sem NF' se não tiver)_",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(
+            [["📋 Sem NF"]], one_time_keyboard=True, resize_keyboard=True
+        ),
+    )
+    return NOTA_FISCAL
+
+
+async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    context.user_data["nota_fiscal"] = "–" if texto == "📋 Sem NF" else texto
+    context.user_data["data"] = datetime.now()
+
     d = context.user_data
     total = d["quantidade"] * d["preco"]
+    nf    = d["nota_fiscal"]
 
     confirmacao = (
         "✅ *Confirme o registro:*\n\n"
@@ -291,10 +304,10 @@ async def receber_preco(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"  📦 Material:   {d['material']}\n"
         f"  🔢 Quantidade: {d['quantidade']} {d['unidade']}\n"
         f"  💲 Preço unit: R$ {d['preco']:,.2f}\n"
-        f"  💰 *Total:      R$ {total:,.2f}*\n\n"
+        f"  💰 *Total:      R$ {total:,.2f}*\n"
+        f"  🧾 Nota Fiscal: {nf}\n\n"
         "Digite *sim* para salvar ou *não* para cancelar."
     )
-    context.user_data["data"] = datetime.now()
     await update.message.reply_text(
         confirmacao,
         parse_mode="Markdown",
@@ -375,9 +388,10 @@ def main():
         states={
             FORNECEDOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_fornecedor)],
             MATERIAL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_material)],
-            QUANTIDADE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_quantidade)],
-            UNIDADE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_unidade)],
-            PRECO:      [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_preco)],
+            QUANTIDADE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_quantidade)],
+            UNIDADE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_unidade)],
+            PRECO:        [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_preco)],
+            NOTA_FISCAL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nota_fiscal)],
         },
         fallbacks=[CommandHandler("cancelar", cancelar)],
     )
