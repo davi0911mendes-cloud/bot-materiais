@@ -46,6 +46,39 @@ logger = logging.getLogger(__name__)
 # Estados do fluxo de conversa
 FORNECEDOR, MATERIAL, QUANTIDADE, UNIDADE, PRECO = range(5)
 
+# ── Listas padrão ────────────────────────────────────────────────────────────
+OUTRO_FORN = "✏️ Outro fornecedor"
+OUTRO_MAT  = "✏️ Outro material"
+
+TECLADO_FORNECEDORES = [
+    ["LISBOA", "MADECENTER"],
+    ["LEO MADEIRAS", "VERDMADE"],
+    ["CENCOMAL", "MADEREIRAS EXTRAS"],
+    ["FGV", "HARDT"],
+    ["HD FERRAGENS", "HAYD FERRAGENS"],
+    ["ALTAPE FILMES E FITAS", "KILDERY THINNER"],
+    ["PEQUENOS FORNECEDORES VARIÁVEIS"],
+    [OUTRO_FORN],
+]
+
+TECLADO_MATERIAIS = [
+    ["CHAPAS UNICOLOR 18MM", "CHAPAS MADEIRADO 18MM"],
+    ["CHAPAS UNICOLOR 15MM", "CHAPAS MADEIRADO 15MM"],
+    ["CHAPAS BRANCO 18MM", "CHAPAS BRANCO 15MM"],
+    ["CHAPAS BRANCO 6MM", "CHAPAS UNICOLOR 6MM"],
+    ["CHAPAS MADEIRADO 6MM", "FITA DE BORDA BRANCA 0,45"],
+    ["FITA DE BORDA COLORIDA 0,45", "FITA DE BORDA BRANCA 1MM"],
+    ["FITA DE BORDA COLORIDA 1MM", "CORREDIÇA INVISIVEL"],
+    ["CORREDIÇA TELESCOPIA", "DOBRADIÇA CURVA"],
+    ["DOBRADIÇA RETA", "COLA FORMICA"],
+    ["COLA EXPANSIVA", "COLA PUR COLADEIRA"],
+    ["COLA INSTANTANEA", "PARAFUSOS"],
+    ["MINIFIX", "CAVILHA"],
+    ["TAMBOR", "PIVO DE PORTA"],
+    ["THINNER", "ALCOOL E VASELINA"],
+    ["ESTOPA", OUTRO_MAT],
+]
+
 
 # ── Google Sheets ────────────────────────────────────────────────────────────
 def _get_sheet():
@@ -162,27 +195,49 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Fluxo /adicionar ─────────────────────────────────────────────────────────
 async def adicionar_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🏭 *Qual o nome do fornecedor?*\n_(ou /cancelar para sair)_",
+        "🏭 *Selecione o fornecedor:*\n_(ou /cancelar para sair)_",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(
+            TECLADO_FORNECEDORES, one_time_keyboard=True, resize_keyboard=True
+        ),
     )
     return FORNECEDOR
 
 
 async def receber_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["fornecedor"] = update.message.text.strip()
+    texto = update.message.text.strip()
+    if texto == OUTRO_FORN:
+        await update.message.reply_text(
+            "🏭 *Digite o nome do fornecedor:*",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return FORNECEDOR
+    context.user_data["fornecedor"] = texto
     await update.message.reply_text(
-        "📦 *Qual o material / produto comprado?*",
+        "📦 *Selecione o material / produto:*",
         parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(
+            TECLADO_MATERIAIS, one_time_keyboard=True, resize_keyboard=True
+        ),
     )
     return MATERIAL
 
 
 async def receber_material(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["material"] = update.message.text.strip()
+    texto = update.message.text.strip()
+    if texto == OUTRO_MAT:
+        await update.message.reply_text(
+            "📦 *Digite o nome do material:*",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return MATERIAL
+    context.user_data["material"] = texto
     await update.message.reply_text(
         "🔢 *Qual a quantidade?*\n_(use ponto para decimais, ex: 10.5)_",
         parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
     )
     return QUANTIDADE
 
