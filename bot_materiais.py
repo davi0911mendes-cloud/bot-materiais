@@ -310,8 +310,19 @@ def aplicar_formatacao():
         ]})
         s.freeze(rows=2)
 
-    criar_resumo('🏭 Por Fornecedor', 2, 'Fornecedor')
-    criar_resumo('📦 Por Material',   3, 'Material / Produto')
+    try:
+        criar_resumo('Por Fornecedor', 2, 'Fornecedor')
+        logger.info("Aba Por Fornecedor criada.")
+    except Exception as e:
+        logger.error(f"Erro ao criar resumo fornecedor: {e}", exc_info=True)
+        raise
+
+    try:
+        criar_resumo('Por Material', 3, 'Material / Produto')
+        logger.info("Aba Por Material criada.")
+    except Exception as e:
+        logger.error(f"Erro ao criar resumo material: {e}", exc_info=True)
+        raise
 
 
 def ultimos_registros(n: int = 5) -> str:
@@ -540,15 +551,15 @@ async def formatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         aplicar_formatacao()
         await update.message.reply_text(
             "✅ *Pronto!*\n\n"
-            "Sua planilha foi formatada e as abas foram criadas:\n"
-            "  🏭 *Por Fornecedor*\n"
-            "  📦 *Por Material*\n\n"
-            "Abra o Google Sheets para ver o resultado!",
+            "Abas criadas na planilha:\n"
+            "  • *Por Fornecedor*\n"
+            "  • *Por Material*\n\n"
+            "Abra o Google Sheets para ver!",
             parse_mode="Markdown"
         )
     except Exception as e:
         logger.error(f"Erro ao formatar: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ Erro ao formatar: {e}")
+        await update.message.reply_text(f"❌ Erro: {e}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
