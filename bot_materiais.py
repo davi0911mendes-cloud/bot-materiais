@@ -658,10 +658,6 @@ def main():
         filters.Regex(r"^(✅ Sim|✅ sim|sim|Sim|❌ Não|não|nao|Não)$"),
         confirmar_e_salvar,
     ))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        confirmar_limpar,
-    ))
     app.add_handler(conv)
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("ajuda",    ajuda))
@@ -669,6 +665,11 @@ def main():
     app.add_handler(CommandHandler("ultimas",  ultimas))
     app.add_handler(CommandHandler("formatar", formatar))
     app.add_handler(CommandHandler("limpar",   limpar))
+    # Deve ficar por ÚLTIMO para não interceptar o ConversationHandler
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        confirmar_limpar,
+    ))
 
     logger.info("🤖 Bot rodando...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
