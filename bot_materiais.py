@@ -555,6 +555,8 @@ def main():
     persistence = PicklePersistence(filepath="/tmp/bot_state")
     app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
+    WEBHOOK_DOMAIN = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+
     app.add_handler(CommandHandler("start",     start))
     app.add_handler(CommandHandler("ajuda",     start))
     app.add_handler(CommandHandler("cancelar",  cancelar))
@@ -573,7 +575,19 @@ def main():
     app.add_error_handler(error_handler)
 
     logger.info("Bot rodando...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    if WEBHOOK_DOMAIN:
+        PORT = int(os.environ.get("PORT", 8080))
+        logger.info(f"Modo WEBHOOK: {WEBHOOK_DOMAIN} porta {PORT}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"https://{WEBHOOK_DOMAIN}/{BOT_TOKEN}",
+            drop_pending_updates=True,
+        )
+    else:
+        logger.info("Modo POLLING (local)")
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
