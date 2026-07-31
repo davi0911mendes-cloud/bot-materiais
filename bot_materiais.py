@@ -34,6 +34,7 @@ S_QUANTIDADE  = "quantidade"
 S_UNIDADE     = "unidade"
 S_PRECO       = "preco"
 S_NOTA_FISCAL = "nota_fiscal"
+S_PAGAMENTO   = "pagamento"
 S_CONFIRMAR   = "confirmar"
 S_LIMPAR      = "limpar"
 
@@ -78,6 +79,11 @@ TECLADO_UNIDADES = [
     ["sacos", "pecas"],
 ]
 
+TECLADO_PAGAMENTO = [
+    ["PIX", "DINHEIRO"],
+    ["CARTAO", "CARTEIRA"],
+]
+
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
 def _get_sheet():
@@ -90,10 +96,10 @@ def _get_sheet():
     try:
         sheet = spreadsheet.worksheet("Registro de Compras")
     except gspread.WorksheetNotFound:
-        sheet = spreadsheet.add_worksheet("Registro de Compras", rows=1000, cols=9)
+        sheet = spreadsheet.add_worksheet("Registro de Compras", rows=1000, cols=10)
         sheet.append_row(
             ["#", "Data", "Fornecedor", "Material / Produto",
-             "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal"],
+             "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal", "Pagamento"],
             value_input_option="USER_ENTERED",
         )
     return sheet
@@ -113,6 +119,7 @@ def salvar_registro(dados: dict) -> int:
         dados["preco"],
         total,
         dados.get("nota_fiscal", "-"),
+        dados.get("pagamento", "-"),
     ]
     sheet.append_row(linha, value_input_option="USER_ENTERED")
     return numero
@@ -172,7 +179,7 @@ def limpar_planilha():
         ws.clear()  # apaga TODO conteúdo e formatação
         ws.append_row(
             ["#", "Data", "Fornecedor", "Material / Produto",
-             "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal"],
+             "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal", "Pagamento"],
             value_input_option="USER_ENTERED",
         )
     except gspread.WorksheetNotFound:
@@ -212,16 +219,16 @@ def aplicar_formatacao():
     last_row  = 1 + len(data_rows)  # linha real do último dado
 
     # Cabecalho
-    ws.update("A1:I1", [["#", "Data", "Fornecedor", "Material / Produto",
-                          "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal"]])
-    ws.format("A1:I1", {
+    ws.update("A1:J1", [["#", "Data", "Fornecedor", "Material / Produto",
+                          "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal", "Pagamento"]])
+    ws.format("A1:J1", {
         "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
         "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
         "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
     })
 
     if last_row > 1:
-        ws.format(f"A2:I{last_row}", {
+        ws.format(f"A2:J{last_row}", {
             "backgroundColor": {"red": 0.839, "green": 0.894, "blue": 0.941},
             "textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE",
         })
@@ -239,11 +246,12 @@ def aplicar_formatacao():
         ws.format(f"A2:A{last_row}", {"horizontalAlignment": "CENTER"})
         ws.format(f"E2:F{last_row}", {"horizontalAlignment": "CENTER"})
         ws.format(f"I2:I{last_row}", {"horizontalAlignment": "CENTER"})
+        ws.format(f"J2:J{last_row}", {"horizontalAlignment": "CENTER"})
 
     ws.freeze(rows=1)
 
     sid        = ws.id
-    col_widths = [45, 105, 185, 230, 55, 85, 140, 140, 125]
+    col_widths = [45, 105, 185, 230, 55, 85, 140, 140, 125, 110]
     requests   = [{"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
         "properties": {"pixelSize": w}, "fields": "pixelSize",
@@ -257,6 +265,7 @@ def aplicar_formatacao():
         t = last_row + 2
         ws.update(f"A{t}", [["TOTAL GERAL"]])
         ws.merge_cells(f"A{t}:G{t}")
+        ws.format(f"I{t}:J{t}", {"backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710}})
         ws.format(f"A{t}:G{t}", {
             "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
@@ -511,17 +520,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── NOTA FISCAL ───────────────────────────────────────────────────────────
     if step == S_NOTA_FISCAL:
         d["nota_fiscal"] = "-" if text == "Sem NF" else text
-        d["data"]        = datetime.now()
+        context.user_data[STEP] = S_PAGAMENTO
+        await update.message.reply_text(
+            "Metodo de pagamento?",
+            reply_markup=ReplyKeyboardMarkup(TECLADO_PAGAMENTO, one_time_keyboard=True, resize_keyboard=True),
+        )
+        return
+
+    # ── PAGAMENTO ─────────────────────────────────────────────────────────────
+    if step == S_PAGAMENTO:
+        d["pagamento"] = text
+        d["data"]      = datetime.now()
         context.user_data[STEP] = S_CONFIRMAR
         total = d["quantidade"] * d["preco"]
         msg   = (
             "Confirme o registro:\n\n"
-            f"  Fornecedor: {d['fornecedor']}\n"
-            f"  Material:   {d['material']}\n"
-            f"  Quantidade: {d['quantidade']} {d.get('unidade','')}\n"
-            f"  Preco unit: R$ {d['preco']:,.2f}\n"
-            f"  TOTAL:      R$ {total:,.2f}\n"
-            f"  Nota Fiscal: {d['nota_fiscal']}\n\n"
+            f"  Fornecedor:  {d['fornecedor']}\n"
+            f"  Material:    {d['material']}\n"
+            f"  Quantidade:  {d['quantidade']} {d.get('unidade','')}\n"
+            f"  Preco unit:  R$ {d['preco']:,.2f}\n"
+            f"  TOTAL:       R$ {total:,.2f}\n"
+            f"  Nota Fiscal: {d['nota_fiscal']}\n"
+            f"  Pagamento:   {d['pagamento']}\n\n"
             "Digite SIM para salvar ou NAO para cancelar."
         )
         await update.message.reply_text(
