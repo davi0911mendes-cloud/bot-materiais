@@ -205,18 +205,19 @@ def aplicar_formatacao():
     all_rows = ws.get_all_values()
     total_rows = len(all_rows)
 
-    # Remove linhas TOTAL antigas e linhas completamente vazias (exceto cabeçalho)
+    # Remove linhas inválidas: TOTAL, vazias, ou sem data (fantasmas)
     for r in sorted(range(2, total_rows + 1), reverse=True):
         vals = ws.row_values(r)
         is_total = vals and "TOTAL" in str(vals[0]).upper()
         is_empty = not any(str(v).strip() for v in vals)
-        if is_total or is_empty:
+        has_date = len(vals) > 1 and str(vals[1]).strip()  # coluna B = Data
+        if is_total or is_empty or not has_date:
             ws.delete_rows(r)
 
     all_rows = ws.get_all_values()
-    # Conta apenas linhas com dado real (coluna B = data preenchida)
+    # Conta apenas linhas com data preenchida (registros reais)
     data_rows = [r for r in all_rows[1:] if len(r) > 1 and str(r[1]).strip()]
-    last_row  = 1 + len(data_rows)  # linha real do último dado
+    last_row  = 1 + len(data_rows)
 
     # Cabecalho
     ws.update("A1:J1", [["#", "Data", "Fornecedor", "Material / Produto",
