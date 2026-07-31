@@ -278,7 +278,10 @@ def aplicar_formatacao():
     }})
     spreadsheet.batch_update({"requests": req})
 
-    # ── 5. TOTAL GERAL logo após os dados (posição dinâmica) ──────────────────
+    # Nota: TOTAL GERAL não fica na aba principal para não conflitar com novos
+    # dados. O total aparece nas abas "Por Fornecedor" e "Por Material".
+
+    # ── 6. Abas de resumo ─────────────────────────────────────────────────────
     def _parse_float(v):
         try:
             s = str(v).strip().replace("R$", "").replace(" ", "")
@@ -290,91 +293,119 @@ def aplicar_formatacao():
         except (ValueError, TypeError):
             return 0.0
 
-    if dados:
-        total_geral = sum(_parse_float(r[7]) for r in dados if len(r) > 7)
-        t = last_row + 2
-        ws.update(f"A{t}:J{t}", [["", "", "", "", "", "", "", "", "", ""]])
-        ws.update(f"A{t}:A{t}", [["TOTAL GERAL"]])
-        ws.merge_cells(f"A{t}:G{t}")
-        ws.format(f"A{t}:G{t}", {
-            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
-        })
-        ws.update(f"H{t}:H{t}", [[round(total_geral, 2)]], value_input_option="USER_ENTERED")
-        ws.format(f"H{t}:J{t}", {"backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710}})
-        ws.format(f"H{t}:H{t}", {
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-            "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
-            "horizontalAlignment": "RIGHT",
-        })
-
-    # ── 6. Abas de resumo ─────────────────────────────────────────────────────
     def criar_resumo(nome, col_idx, titulo_col):
         try:
             spreadsheet.del_worksheet(spreadsheet.worksheet(nome))
         except Exception:
             pass
-        s = spreadsheet.add_worksheet(nome, rows=500, cols=3)
+        s = spreadsheet.add_worksheet(nome, rows=500, cols=5)
 
+        # Coleta e agrupa
         unicos = sorted(set(
             r[col_idx] for r in dados
             if len(r) > col_idx and str(r[col_idx]).strip()
         ))
         logger.info(f"[RESUMO] {nome}: {len(unicos)} itens únicos")
 
-        # Título e cabeçalhos
-        s.update("A1:A1", [[titulo_col]])
-        s.merge_cells("A1:C1")
-        s.format("A1:C1", {
-            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 13},
-            "horizontalAlignment": "CENTER",
-        })
-        s.update("A2:C2", [[titulo_col, "Qtd. Compras", "Total Gasto (R$)"]])
-        s.format("A2:C2", {
-            "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
-            "horizontalAlignment": "CENTER",
-        })
-
-        # Calcula linhas de dados
-        rows_data   = []
-        total_soma  = 0.0
+        rows_data  = []
+        total_soma = 0.0
         for u in unicos:
             regs = [r for r in dados if len(r) > col_idx and r[col_idx] == u]
             tot  = sum(_parse_float(r[7]) for r in regs if len(r) > 7)
             total_soma += tot
             rows_data.append([u, len(regs), round(tot, 2)])
 
+        # Ordena por maior gasto
+        rows_data.sort(key=lambda x: x[2], reverse=True)
+
+        # Adiciona coluna % do total
+        for row in rows_data:
+            pct = (row[2] / total_soma * 100) if total_soma > 0 else 0
+            row.append(round(pct, 1))
+
+        # ── Cabeçalho título ──────────────────────────────────────────────────
+        s.update("A1:A1", [[titulo_col]])
+        s.merge_cells("A1:E1")
+        s.format("A1:E1", {
+            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 13},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        })
+
+        # ── Cabeçalho colunas ─────────────────────────────────────────────────
+        s.update("A2:E2", [[titulo_col, "Qtd. Compras", "Total Gasto (R$)", "Ranking", "% do Total"]])
+        s.format("A2:E2", {
+            "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
+            "horizontalAlignment": "CENTER",
+        })
+
         if rows_data:
             n       = len(rows_data)
-            end_row = 2 + n          # linha final dos dados (ex: n=2 → end_row=4)
-            s.update(f"A3:C{end_row}", rows_data, value_input_option="USER_ENTERED")
-            s.format(f"A3:C{end_row}", {"textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE"})
+            end_row = 2 + n
+
+            # Adiciona coluna de ranking (1º, 2º, 3º...)
+            final_rows = []
+            for i, row in enumerate(rows_data):
+                final_rows.append([row[0], row[1], row[2], f"{i+1}º", row[3]])
+
+            s.update(f"A3:E{end_row}", final_rows, value_input_option="USER_ENTERED")
+
+            # Formatação zebra (linhas alternadas)
+            for i in range(n):
+                linha = 3 + i
+                bg = {"red": 0.839, "green": 0.894, "blue": 0.941} if i % 2 == 0 else {"red": 0.922, "green": 0.949, "blue": 0.973}
+                s.format(f"A{linha}:E{linha}", {
+                    "backgroundColor": bg,
+                    "textFormat": {"fontSize": 10},
+                    "verticalAlignment": "MIDDLE",
+                })
+
+            # Coluna Total em verde
             s.format(f"C3:C{end_row}", {
-                "backgroundColor": {"red": 0.886, "green": 0.937, "blue": 0.855},
+                "backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827},
                 "textFormat": {"bold": True},
                 "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
                 "horizontalAlignment": "RIGHT",
             })
-            # TOTAL na linha end_row + 2
+            # Coluna Qtd centralizada
+            s.format(f"B3:B{end_row}", {"horizontalAlignment": "CENTER"})
+            # Coluna Ranking centralizada
+            s.format(f"D3:D{end_row}", {"horizontalAlignment": "CENTER"})
+            # Coluna % com formato percentual
+            s.format(f"E3:E{end_row}", {
+                "horizontalAlignment": "CENTER",
+                "numberFormat": {"type": "NUMBER", "pattern": "0.0\"%\""},
+            })
+
+            # ── Linha TOTAL GERAL ─────────────────────────────────────────────
             t2 = end_row + 2
-            s.update(f"A{t2}:C{t2}", [["TOTAL", "", round(total_soma, 2)]], value_input_option="USER_ENTERED")
+            s.update(f"A{t2}:E{t2}", [["TOTAL GERAL", len(dados), round(total_soma, 2), "", "100%"]],
+                     value_input_option="USER_ENTERED")
             s.merge_cells(f"A{t2}:B{t2}")
-            s.format(f"A{t2}:C{t2}", {
+            s.format(f"A{t2}:E{t2}", {
                 "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
-                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
+                "horizontalAlignment": "CENTER",
+            })
+            s.format(f"C{t2}:C{t2}", {
                 "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
                 "horizontalAlignment": "RIGHT",
             })
 
-        # Largura das colunas do resumo
+        # ── Largura das colunas ───────────────────────────────────────────────
         sid2 = s.id
+        col_px = [230, 110, 150, 80, 90]
         spreadsheet.batch_update({"requests": [
-            {"updateDimensionProperties": {"range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 230}, "fields": "pixelSize"}},
-            {"updateDimensionProperties": {"range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 120}, "fields": "pixelSize"}},
-            {"updateDimensionProperties": {"range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 3}, "properties": {"pixelSize": 160}, "fields": "pixelSize"}},
+            {"updateDimensionProperties": {
+                "range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+                "properties": {"pixelSize": w}, "fields": "pixelSize",
+            }} for i, w in enumerate(col_px)
+        ] + [
+            {"updateDimensionProperties": {
+                "range": {"sheetId": sid2, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
+                "properties": {"pixelSize": 36}, "fields": "pixelSize",
+            }},
         ]})
         s.freeze(rows=2)
 
