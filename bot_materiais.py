@@ -202,20 +202,9 @@ def aplicar_formatacao():
     except gspread.WorksheetNotFound:
         raise ValueError("Aba 'Registro de Compras' nao encontrada.")
 
-    # ── 1. Busca todos os dados e remove linhas inválidas (usa cache) ──────────
-    all_rows   = ws.get_all_values()
-    total_rows = len(all_rows)
-
-    for r in sorted(range(2, total_rows + 1), reverse=True):
-        vals     = all_rows[r - 1]  # usa cache em vez de ws.row_values(r)
-        is_total = bool(vals) and "TOTAL" in str(vals[0]).upper()
-        is_empty = not any(str(v).strip() for v in vals)
-        has_date = len(vals) > 1 and bool(str(vals[1]).strip())
-        if is_total or is_empty or not has_date:
-            ws.delete_rows(r)
-
-    # ── 2. Re-busca após limpeza e guarda dados para os resumos ───────────────
+    # ── 1. Busca todos os dados ────────────────────────────────────────────────
     all_rows  = ws.get_all_values()
+    # Considera apenas linhas com data preenchida na coluna B (registros reais)
     data_rows = [r for r in all_rows[1:] if len(r) > 1 and str(r[1]).strip()]
     last_row  = 1 + len(data_rows)
     dados     = data_rows  # salvo ANTES de adicionar linha TOTAL
