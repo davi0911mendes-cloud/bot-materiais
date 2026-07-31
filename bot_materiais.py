@@ -205,6 +205,9 @@ def aplicar_formatacao():
     except gspread.WorksheetNotFound:
         raise ValueError("Aba 'Registro de Compras' nao encontrada.")
 
+    # Garante que a planilha tem linhas suficientes para MAX_DATA + TOTAL
+    ws.resize(rows=1100, cols=10)
+
     # ── 1. Lê dados reais (linhas com data na coluna B, sem TOTAL) ────────────
     all_rows = ws.get_all_values()
     dados = [
