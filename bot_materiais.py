@@ -106,10 +106,17 @@ def _get_sheet():
 
 
 def salvar_registro(dados: dict) -> int:
-    sheet  = _get_sheet()
-    total  = dados["quantidade"] * dados["preco"]
-    numero = max(len(sheet.get_all_values()) - 1, 0) + 1
-    linha  = [
+    sheet    = _get_sheet()
+    all_vals = sheet.get_all_values()
+    # Conta apenas linhas com data real (ignora TOTAL e linhas vazias)
+    data_rows = [
+        r for r in all_vals[1:]
+        if len(r) > 1 and str(r[1]).strip() and "TOTAL" not in str(r[0]).upper()
+    ]
+    numero   = len(data_rows) + 1
+    next_row = len(data_rows) + 2  # +1 cabeçalho, +1 próxima linha
+    total    = dados["quantidade"] * dados["preco"]
+    linha    = [
         numero,
         dados["data"].strftime("%d/%m/%Y"),
         dados["fornecedor"],
@@ -121,7 +128,8 @@ def salvar_registro(dados: dict) -> int:
         dados.get("nota_fiscal", "-"),
         dados.get("pagamento", "-"),
     ]
-    sheet.append_row(linha, value_input_option="USER_ENTERED")
+    # Escreve na posição correta (ignora qualquer linha TOTAL existente)
+    sheet.update(f"A{next_row}:J{next_row}", [linha], value_input_option="USER_ENTERED")
     return numero
 
 
@@ -192,8 +200,7 @@ def limpar_planilha():
 
 
 def aplicar_formatacao():
-    MAX_DATA = 1000   # suporta até 1000 compras
-    T_ROW    = 1002   # linha fixa do TOTAL GERAL
+    MAX_DATA = 500   # pré-formata 500 linhas (suficiente para anos de uso)
 
     creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
@@ -205,16 +212,24 @@ def aplicar_formatacao():
     except gspread.WorksheetNotFound:
         raise ValueError("Aba 'Registro de Compras' nao encontrada.")
 
-    # Garante que a planilha tem linhas suficientes para MAX_DATA + TOTAL
-    ws.resize(rows=1100, cols=10)
+    # Garante linhas suficientes
+    ws.resize(rows=MAX_DATA + 50, cols=10)
 
-    # ── 1. Lê dados reais (linhas com data na coluna B, sem TOTAL) ────────────
+    # ── 1. Lê todos os dados e remove linhas TOTAL antigas ────────────────────
+    all_rows = ws.get_all_values()
+    for r in sorted(range(2, len(all_rows) + 1), reverse=True):
+        idx = r - 1
+        if idx < len(all_rows) and all_rows[idx] and "TOTAL" in str(all_rows[idx][0]).upper():
+            ws.delete_rows(r)
+
+    # Re-lê após remoção do TOTAL antigo
     all_rows = ws.get_all_values()
     dados = [
         r for r in all_rows[1:]
-        if len(r) > 1 and str(r[1]).strip() and "TOTAL" not in str(r[0]).upper()
+        if len(r) > 1 and str(r[1]).strip()
     ]
-    logger.info(f"[FORMATAR] {len(dados)} registros encontrados")
+    last_row = 1 + len(dados)  # linha do último dado real
+    logger.info(f"[FORMATAR] {len(dados)} registros encontrados, last_row={last_row}")
 
     # ── 2. Cabeçalho ──────────────────────────────────────────────────────────
     ws.update("A1:J1", [["#", "Data", "Fornecedor", "Material / Produto",
@@ -225,8 +240,7 @@ def aplicar_formatacao():
         "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
     })
 
-    # ── 3. Pré-formata 1000 linhas de dados de uma vez ────────────────────────
-    #       (novas compras adicionadas depois já ficam formatadas automaticamente)
+    # ── 3. Pré-formata 500 linhas (novas compras ficam formatadas automaticamente)
     ws.format(f"A2:J{MAX_DATA}", {
         "backgroundColor": {"red": 0.839, "green": 0.894, "blue": 0.941},
         "textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE",
@@ -264,8 +278,7 @@ def aplicar_formatacao():
     }})
     spreadsheet.batch_update({"requests": req})
 
-    # ── 5. TOTAL GERAL na linha fixa T_ROW (1002) ─────────────────────────────
-    #       Soma calculada em Python → sem depender de locale ou fórmulas
+    # ── 5. TOTAL GERAL logo após os dados (posição dinâmica) ──────────────────
     def _parse_float(v):
         try:
             s = str(v).strip().replace("R$", "").replace(" ", "")
@@ -277,26 +290,24 @@ def aplicar_formatacao():
         except (ValueError, TypeError):
             return 0.0
 
-    total_geral = sum(_parse_float(r[7]) for r in dados if len(r) > 7)
-
-    # Limpa a linha inteira antes de escrever
-    ws.update(f"A{T_ROW}:J{T_ROW}", [["", "", "", "", "", "", "", "", "", ""]])
-    ws.update(f"A{T_ROW}:A{T_ROW}", [["TOTAL GERAL"]])
-    ws.merge_cells(f"A{T_ROW}:G{T_ROW}")
-    ws.format(f"A{T_ROW}:G{T_ROW}", {
-        "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
-        "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-        "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
-    })
-    ws.update(f"H{T_ROW}:H{T_ROW}", [[round(total_geral, 2)]], value_input_option="USER_ENTERED")
-    ws.format(f"H{T_ROW}:J{T_ROW}", {
-        "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
-    })
-    ws.format(f"H{T_ROW}:H{T_ROW}", {
-        "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-        "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
-        "horizontalAlignment": "RIGHT",
-    })
+    if dados:
+        total_geral = sum(_parse_float(r[7]) for r in dados if len(r) > 7)
+        t = last_row + 2
+        ws.update(f"A{t}:J{t}", [["", "", "", "", "", "", "", "", "", ""]])
+        ws.update(f"A{t}:A{t}", [["TOTAL GERAL"]])
+        ws.merge_cells(f"A{t}:G{t}")
+        ws.format(f"A{t}:G{t}", {
+            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        })
+        ws.update(f"H{t}:H{t}", [[round(total_geral, 2)]], value_input_option="USER_ENTERED")
+        ws.format(f"H{t}:J{t}", {"backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710}})
+        ws.format(f"H{t}:H{t}", {
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
+            "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+            "horizontalAlignment": "RIGHT",
+        })
 
     # ── 6. Abas de resumo ─────────────────────────────────────────────────────
     def criar_resumo(nome, col_idx, titulo_col):
