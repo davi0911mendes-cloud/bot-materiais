@@ -460,13 +460,12 @@ async def receber_quantidade(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         context.user_data["quantidade"] = float(texto)
     except ValueError:
-        await update.message.reply_text("❌ Número inválido. Digite novamente:")
+        await update.message.reply_text("Numero invalido. Digite novamente:")
         return QUANTIDADE
 
-    teclado = [["kg", "g"], ["L", "mL"], ["m", "m²"], ["un", "cx"], ["sacos", "peças"]]
+    teclado = [["kg", "g"], ["L", "mL"], ["m", "m2"], ["un", "cx"], ["sacos", "pecas"]]
     await update.message.reply_text(
-        "📏 *Qual a unidade?*\n_(escolha ou digite outra)_",
-        parse_mode="Markdown",
+        "Qual a unidade? (escolha ou digite outra)",
         reply_markup=ReplyKeyboardMarkup(teclado, one_time_keyboard=True, resize_keyboard=True),
     )
     return UNIDADE
@@ -672,6 +671,15 @@ def main():
     app.add_handler(CommandHandler("resumo",   resumo))
     app.add_handler(CommandHandler("ultimas",  ultimas))
     app.add_handler(CommandHandler("formatar", formatar))
+
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+        logger.error("Erro no handler:", exc_info=context.error)
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                f"ERRO INTERNO: {context.error}\n\nEnvie /cancelar e tente novamente."
+            )
+
+    app.add_error_handler(error_handler)
 
     logger.info("🤖 Bot rodando...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
