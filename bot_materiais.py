@@ -192,6 +192,9 @@ def limpar_planilha():
 
 
 def aplicar_formatacao():
+    MAX_DATA = 1000   # suporta até 1000 compras
+    T_ROW    = 1002   # linha fixa do TOTAL GERAL
+
     creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
     gc             = gspread.service_account_from_dict(json.loads(creds_str))
@@ -202,14 +205,15 @@ def aplicar_formatacao():
     except gspread.WorksheetNotFound:
         raise ValueError("Aba 'Registro de Compras' nao encontrada.")
 
-    # ── 1. Busca todos os dados ────────────────────────────────────────────────
-    all_rows  = ws.get_all_values()
-    # Considera apenas linhas com data preenchida na coluna B (registros reais)
-    data_rows = [r for r in all_rows[1:] if len(r) > 1 and str(r[1]).strip()]
-    last_row  = 1 + len(data_rows)
-    dados     = data_rows  # salvo ANTES de adicionar linha TOTAL
+    # ── 1. Lê dados reais (linhas com data na coluna B, sem TOTAL) ────────────
+    all_rows = ws.get_all_values()
+    dados = [
+        r for r in all_rows[1:]
+        if len(r) > 1 and str(r[1]).strip() and "TOTAL" not in str(r[0]).upper()
+    ]
+    logger.info(f"[FORMATAR] {len(dados)} registros encontrados")
 
-    # ── 3. Formata cabeçalho ──────────────────────────────────────────────────
+    # ── 2. Cabeçalho ──────────────────────────────────────────────────────────
     ws.update("A1:J1", [["#", "Data", "Fornecedor", "Material / Produto",
                           "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal", "Pagamento"]])
     ws.format("A1:J1", {
@@ -218,65 +222,47 @@ def aplicar_formatacao():
         "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
     })
 
-    if last_row > 1:
-        ws.format(f"A2:J{last_row}", {
-            "backgroundColor": {"red": 0.839, "green": 0.894, "blue": 0.941},
-            "textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE",
-        })
-        ws.format(f"H2:H{last_row}", {
-            "backgroundColor": {"red": 0.886, "green": 0.937, "blue": 0.855},
-            "textFormat": {"bold": True},
-            "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
-            "horizontalAlignment": "RIGHT",
-        })
-        ws.format(f"G2:G{last_row}", {
-            "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
-            "horizontalAlignment": "RIGHT",
-        })
-        ws.format(f"B2:B{last_row}", {"numberFormat": {"type": "DATE", "pattern": "dd/mm/yyyy"}, "horizontalAlignment": "CENTER"})
-        ws.format(f"A2:A{last_row}", {"horizontalAlignment": "CENTER"})
-        ws.format(f"E2:F{last_row}", {"horizontalAlignment": "CENTER"})
-        ws.format(f"I2:I{last_row}", {"horizontalAlignment": "CENTER"})
-        ws.format(f"J2:J{last_row}", {"horizontalAlignment": "CENTER"})
+    # ── 3. Pré-formata 1000 linhas de dados de uma vez ────────────────────────
+    #       (novas compras adicionadas depois já ficam formatadas automaticamente)
+    ws.format(f"A2:J{MAX_DATA}", {
+        "backgroundColor": {"red": 0.839, "green": 0.894, "blue": 0.941},
+        "textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE",
+    })
+    ws.format(f"H2:H{MAX_DATA}", {
+        "backgroundColor": {"red": 0.886, "green": 0.937, "blue": 0.855},
+        "textFormat": {"bold": True},
+        "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+        "horizontalAlignment": "RIGHT",
+    })
+    ws.format(f"G2:G{MAX_DATA}", {
+        "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+        "horizontalAlignment": "RIGHT",
+    })
+    ws.format(f"B2:B{MAX_DATA}", {
+        "numberFormat": {"type": "DATE", "pattern": "dd/mm/yyyy"},
+        "horizontalAlignment": "CENTER",
+    })
+    ws.format(f"A2:A{MAX_DATA}", {"horizontalAlignment": "CENTER"})
+    ws.format(f"E2:F{MAX_DATA}", {"horizontalAlignment": "CENTER"})
+    ws.format(f"I2:J{MAX_DATA}", {"horizontalAlignment": "CENTER"})
 
     ws.freeze(rows=1)
 
-    # ── 4. Largura das colunas ────────────────────────────────────────────────
+    # ── 4. Largura das colunas e altura do cabeçalho ──────────────────────────
     sid        = ws.id
     col_widths = [45, 105, 185, 230, 55, 85, 140, 140, 125, 110]
-    requests   = [{"updateDimensionProperties": {
+    req = [{"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
         "properties": {"pixelSize": w}, "fields": "pixelSize",
     }} for i, w in enumerate(col_widths)]
-    requests.append({"updateDimensionProperties": {
+    req.append({"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
         "properties": {"pixelSize": 42}, "fields": "pixelSize",
     }})
-    spreadsheet.batch_update({"requests": requests})
+    spreadsheet.batch_update({"requests": req})
 
-    # ── 5. Linha TOTAL GERAL ──────────────────────────────────────────────────
-    if last_row > 1:
-        t = last_row + 2
-        # Limpa a linha inteira antes de escrever (evita lixo de runs anteriores)
-        ws.update(f"A{t}:J{t}", [["", "", "", "", "", "", "", "", "", ""]])
-        ws.update(f"A{t}:A{t}", [["TOTAL GERAL"]])
-        ws.merge_cells(f"A{t}:G{t}")
-        ws.format(f"A{t}:G{t}", {
-            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
-        })
-        ws.update(f"H{t}:H{t}", [[f"=SUM(H2:H{last_row})"]], value_input_option="USER_ENTERED")
-        ws.format(f"H{t}:J{t}", {
-            "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
-        })
-        ws.format(f"H{t}:H{t}", {
-            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
-            "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
-            "horizontalAlignment": "RIGHT",
-        })
-
-    # ── 6. Abas de resumo ─────────────────────────────────────────────────────
+    # ── 5. TOTAL GERAL na linha fixa T_ROW (1002) ─────────────────────────────
+    #       Soma calculada em Python → sem depender de locale ou fórmulas
     def _parse_float(v):
         try:
             s = str(v).strip().replace("R$", "").replace(" ", "")
@@ -288,25 +274,49 @@ def aplicar_formatacao():
         except (ValueError, TypeError):
             return 0.0
 
+    total_geral = sum(_parse_float(r[7]) for r in dados if len(r) > 7)
+
+    # Limpa a linha inteira antes de escrever
+    ws.update(f"A{T_ROW}:J{T_ROW}", [["", "", "", "", "", "", "", "", "", ""]])
+    ws.update(f"A{T_ROW}:A{T_ROW}", [["TOTAL GERAL"]])
+    ws.merge_cells(f"A{T_ROW}:G{T_ROW}")
+    ws.format(f"A{T_ROW}:G{T_ROW}", {
+        "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
+        "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
+        "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+    })
+    ws.update(f"H{T_ROW}:H{T_ROW}", [[round(total_geral, 2)]], value_input_option="USER_ENTERED")
+    ws.format(f"H{T_ROW}:J{T_ROW}", {
+        "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
+    })
+    ws.format(f"H{T_ROW}:H{T_ROW}", {
+        "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 12},
+        "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+        "horizontalAlignment": "RIGHT",
+    })
+
+    # ── 6. Abas de resumo ─────────────────────────────────────────────────────
     def criar_resumo(nome, col_idx, titulo_col):
         try:
             spreadsheet.del_worksheet(spreadsheet.worksheet(nome))
         except Exception:
             pass
-        s      = spreadsheet.add_worksheet(nome, rows=200, cols=3)
+        s = spreadsheet.add_worksheet(nome, rows=500, cols=3)
+
         unicos = sorted(set(
             r[col_idx] for r in dados
-            if len(r) > col_idx and r[col_idx]
+            if len(r) > col_idx and str(r[col_idx]).strip()
         ))
+        logger.info(f"[RESUMO] {nome}: {len(unicos)} itens únicos")
 
+        # Título e cabeçalhos
         s.update("A1:A1", [[titulo_col]])
+        s.merge_cells("A1:C1")
         s.format("A1:C1", {
             "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
             "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 13},
             "horizontalAlignment": "CENTER",
         })
-        s.merge_cells("A1:C1")
-
         s.update("A2:C2", [[titulo_col, "Qtd. Compras", "Total Gasto (R$)"]])
         s.format("A2:C2", {
             "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
@@ -314,20 +324,18 @@ def aplicar_formatacao():
             "horizontalAlignment": "CENTER",
         })
 
+        # Calcula linhas de dados
         rows_data   = []
-        total_geral = 0.0
+        total_soma  = 0.0
         for u in unicos:
             regs = [r for r in dados if len(r) > col_idx and r[col_idx] == u]
-            qtd  = len(regs)
             tot  = sum(_parse_float(r[7]) for r in regs if len(r) > 7)
-            total_geral += tot
-            rows_data.append([u, qtd, round(tot, 2)])
-
-        logger.info(f"[RESUMO] {nome}: {len(rows_data)} itens, total={total_geral:.2f}")
+            total_soma += tot
+            rows_data.append([u, len(regs), round(tot, 2)])
 
         if rows_data:
-            n        = len(rows_data)
-            end_row  = 2 + n
+            n       = len(rows_data)
+            end_row = 2 + n          # linha final dos dados (ex: n=2 → end_row=4)
             s.update(f"A3:C{end_row}", rows_data, value_input_option="USER_ENTERED")
             s.format(f"A3:C{end_row}", {"textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE"})
             s.format(f"C3:C{end_row}", {
@@ -336,8 +344,9 @@ def aplicar_formatacao():
                 "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
                 "horizontalAlignment": "RIGHT",
             })
+            # TOTAL na linha end_row + 2
             t2 = end_row + 2
-            s.update(f"A{t2}:C{t2}", [["TOTAL", "", round(total_geral, 2)]], value_input_option="USER_ENTERED")
+            s.update(f"A{t2}:C{t2}", [["TOTAL", "", round(total_soma, 2)]], value_input_option="USER_ENTERED")
             s.merge_cells(f"A{t2}:B{t2}")
             s.format(f"A{t2}:C{t2}", {
                 "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
@@ -346,6 +355,7 @@ def aplicar_formatacao():
                 "horizontalAlignment": "RIGHT",
             })
 
+        # Largura das colunas do resumo
         sid2 = s.id
         spreadsheet.batch_update({"requests": [
             {"updateDimensionProperties": {"range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 230}, "fields": "pixelSize"}},
