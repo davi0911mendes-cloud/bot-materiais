@@ -12,7 +12,7 @@ from datetime import datetime
 
 import gspread
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters, PicklePersistence
 
 # ── Configuração ─────────────────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -552,7 +552,8 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN nao configurado!")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    persistence = PicklePersistence(filepath="/tmp/bot_state")
+    app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
     app.add_handler(CommandHandler("start",     start))
     app.add_handler(CommandHandler("ajuda",     start))
