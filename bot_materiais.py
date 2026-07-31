@@ -168,10 +168,13 @@ def limpar_planilha():
     gc             = gspread.service_account_from_dict(json.loads(creds_str))
     spreadsheet    = gc.open_by_key(spreadsheet_id)
     try:
-        ws       = spreadsheet.worksheet("Registro de Compras")
-        last_row = len(ws.get_all_values())
-        if last_row > 1:
-            ws.delete_rows(2, last_row)
+        ws = spreadsheet.worksheet("Registro de Compras")
+        ws.clear()  # apaga TODO conteúdo e formatação
+        ws.append_row(
+            ["#", "Data", "Fornecedor", "Material / Produto",
+             "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal"],
+            value_input_option="USER_ENTERED",
+        )
     except gspread.WorksheetNotFound:
         pass
     for nome in ("Por Fornecedor", "Por Material"):
@@ -193,15 +196,20 @@ def aplicar_formatacao():
         raise ValueError("Aba 'Registro de Compras' nao encontrada.")
 
     all_rows = ws.get_all_values()
-    last_row = max(len(all_rows), 1)
+    total_rows = len(all_rows)
 
-    # Remove linhas TOTAL antigas
-    for r in sorted(range(2, last_row + 1), reverse=True):
+    # Remove linhas TOTAL antigas e linhas completamente vazias (exceto cabeçalho)
+    for r in sorted(range(2, total_rows + 1), reverse=True):
         vals = ws.row_values(r)
-        if vals and "TOTAL" in str(vals[0]).upper():
+        is_total = vals and "TOTAL" in str(vals[0]).upper()
+        is_empty = not any(str(v).strip() for v in vals)
+        if is_total or is_empty:
             ws.delete_rows(r)
+
     all_rows = ws.get_all_values()
-    last_row = max(len(all_rows), 1)
+    # Conta apenas linhas com dado real (coluna B = data preenchida)
+    data_rows = [r for r in all_rows[1:] if len(r) > 1 and str(r[1]).strip()]
+    last_row  = 1 + len(data_rows)  # linha real do último dado
 
     # Cabecalho
     ws.update("A1:I1", [["#", "Data", "Fornecedor", "Material / Produto",
