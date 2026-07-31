@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Estados do fluxo de conversa
 FORNECEDOR, MATERIAL, QUANTIDADE, UNIDADE, PRECO, NOTA_FISCAL = range(6)
+CONFIRMAR_LIMPAR = 6
 
 # ── Listas padrão ────────────────────────────────────────────────────────────
 OUTRO_FORN = "✏️ Outro fornecedor"
@@ -584,30 +585,28 @@ async def ultimas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def limpar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚠️ *Tem certeza?*\n\nIsso vai apagar *TODOS* os registros da planilha.\n\nDigite *CONFIRMAR* para continuar ou qualquer outra coisa para cancelar.",
-        parse_mode="Markdown"
+        "⚠️ *Tem certeza?*\n\nIsso vai apagar *TODOS* os registros da planilha.\n\nDigite *CONFIRMAR* para continuar ou /cancelar para sair.",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
     )
-    context.user_data["aguardando_confirmacao_limpar"] = True
+    return CONFIRMAR_LIMPAR
 
 
 async def confirmar_limpar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("aguardando_confirmacao_limpar"):
-        return
-    context.user_data.pop("aguardando_confirmacao_limpar", None)
-
     if update.message.text.strip().upper() == "CONFIRMAR":
         await update.message.reply_text("⏳ Limpando planilha...")
         try:
             limpar_planilha()
             await update.message.reply_text(
                 "✅ *Planilha limpa!*\n\nTodos os dados foram apagados. O cabeçalho foi mantido.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
             )
         except Exception as e:
             logger.error(f"Erro ao limpar: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Erro ao limpar: {e}")
     else:
         await update.message.reply_text("🚫 Operação cancelada.")
+    return ConversationHandler.END
 
 
 async def formatar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -654,22 +653,25 @@ def main():
         fallbacks=[CommandHandler("cancelar", cancelar)],
     )
 
+    conv_limpar = ConversationHandler(
+        entry_points=[CommandHandler("limpar", limpar)],
+        states={
+            CONFIRMAR_LIMPAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmar_limpar)],
+        },
+        fallbacks=[CommandHandler("cancelar", cancelar)],
+    )
+
     app.add_handler(MessageHandler(
         filters.Regex(r"^(✅ Sim|✅ sim|sim|Sim|❌ Não|não|nao|Não)$"),
         confirmar_e_salvar,
     ))
     app.add_handler(conv)
+    app.add_handler(conv_limpar)
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("ajuda",    ajuda))
     app.add_handler(CommandHandler("resumo",   resumo))
     app.add_handler(CommandHandler("ultimas",  ultimas))
     app.add_handler(CommandHandler("formatar", formatar))
-    app.add_handler(CommandHandler("limpar",   limpar))
-    # Deve ficar por ÚLTIMO para não interceptar o ConversationHandler
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        confirmar_limpar,
-    ))
 
     logger.info("🤖 Bot rodando...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
