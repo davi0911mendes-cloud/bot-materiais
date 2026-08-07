@@ -108,15 +108,20 @@ def _get_sheet():
 def salvar_registro(dados: dict) -> int:
     sheet    = _get_sheet()
     all_vals = sheet.get_all_values()
-    # Conta apenas linhas com data real (ignora TOTAL e linhas vazias)
-    data_rows = [
-        r for r in all_vals[1:]
-        if len(r) > 1 and str(r[1]).strip() and "TOTAL" not in str(r[0]).upper()
-    ]
-    numero   = len(data_rows) + 1
-    next_row = len(data_rows) + 2  # +1 cabeçalho, +1 próxima linha
-    total    = dados["quantidade"] * dados["preco"]
-    linha    = [
+
+    # Remove qualquer linha TOTAL antes de salvar (evita conflito com mesclagem)
+    for r in sorted(range(2, len(all_vals) + 1), reverse=True):
+        idx = r - 1
+        if idx < len(all_vals) and all_vals[idx] and "TOTAL" in str(all_vals[idx][0]).upper():
+            sheet.delete_rows(r)
+            logger.info(f"[SALVAR] Removeu linha TOTAL em {r}")
+
+    # Re-lê após limpeza
+    all_vals  = sheet.get_all_values()
+    data_rows = [r for r in all_vals[1:] if len(r) > 1 and str(r[1]).strip()]
+    numero    = len(data_rows) + 1
+    total     = dados["quantidade"] * dados["preco"]
+    linha     = [
         numero,
         dados["data"].strftime("%d/%m/%Y"),
         dados["fornecedor"],
@@ -128,8 +133,7 @@ def salvar_registro(dados: dict) -> int:
         dados.get("nota_fiscal", "-"),
         dados.get("pagamento", "-"),
     ]
-    # Escreve na posição correta (ignora qualquer linha TOTAL existente)
-    sheet.update(f"A{next_row}:J{next_row}", [linha], value_input_option="USER_ENTERED")
+    sheet.append_row(linha, value_input_option="USER_ENTERED")
     return numero
 
 
