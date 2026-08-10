@@ -269,10 +269,22 @@ def aplicar_formatacao():
 
     ws.freeze(rows=1)
 
-    # ── 4. Largura das colunas e altura do cabeçalho ──────────────────────────
+    # ── 4. Desmescla toda a área de dados + largura das colunas ──────────────
     sid        = ws.id
     col_widths = [45, 105, 185, 230, 55, 85, 140, 140, 125, 110]
-    req = [{"updateDimensionProperties": {
+    req = [
+        # Desmescla qualquer célula mesclada na área de dados (resolve TOTAL antigo)
+        {"unmergeCells": {
+            "range": {
+                "sheetId": sid,
+                "startRowIndex": 1,       # linha 2 (0-based)
+                "endRowIndex": MAX_DATA,  # até linha 500
+                "startColumnIndex": 0,
+                "endColumnIndex": 10,
+            }
+        }},
+    ]
+    req += [{"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
         "properties": {"pixelSize": w}, "fields": "pixelSize",
     }} for i, w in enumerate(col_widths)]
