@@ -181,6 +181,51 @@ def ultimos_registros(n: int = 5) -> str:
     return "\n".join(linhas)
 
 
+def resetar_estrutura():
+    """Preserva os dados reais e reconstrói a planilha do zero (sem TOTAL, sem mesclagens)."""
+    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
+    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    spreadsheet    = gc.open_by_key(spreadsheet_id)
+
+    CABECALHO = ["#", "Data", "Fornecedor", "Material / Produto",
+                 "Qtd", "Unidade", "Preco Unit. (R$)", "Total (R$)", "Nota Fiscal", "Pagamento"]
+
+    try:
+        ws = spreadsheet.worksheet("Registro de Compras")
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet("Registro de Compras", rows=600, cols=10)
+        ws.append_row(CABECALHO, value_input_option="USER_ENTERED")
+        return 0
+
+    # Lê todos os dados antes de apagar
+    all_vals = ws.get_all_values()
+    # Filtra apenas linhas com data real (ignora TOTAL, linhas vazias e cabeçalho)
+    dados_reais = [
+        r for r in all_vals[1:]
+        if len(r) > 1
+        and str(r[1]).strip()
+        and "TOTAL" not in str(r[0]).upper()
+        and any(str(v).strip() for v in r)
+    ]
+
+    # Renumera os registros em sequência
+    for i, r in enumerate(dados_reais):
+        if len(r) > 0:
+            r[0] = str(i + 1)
+
+    # Limpa tudo (conteúdo + formatação + mesclagens)
+    ws.clear()
+
+    # Reescreve cabeçalho + dados limpos
+    ws.append_row(CABECALHO, value_input_option="USER_ENTERED")
+    if dados_reais:
+        ws.update(f"A2:J{1 + len(dados_reais)}", dados_reais, value_input_option="USER_ENTERED")
+
+    logger.info(f"[RESETAR] {len(dados_reais)} registros preservados")
+    return len(dados_reais)
+
+
 def limpar_planilha():
     creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
@@ -469,6 +514,20 @@ async def ultimas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Erro ao acessar a planilha.")
 
 
+async def resetar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Reconstruindo estrutura da planilha... (pode levar 30 segundos)")
+    try:
+        n = resetar_estrutura()
+        await update.message.reply_text(
+            f"Estrutura reconstruída!\n"
+            f"{n} registro(s) preservado(s).\n\n"
+            "Use /formatar para aplicar a formatação visual."
+        )
+    except Exception as e:
+        logger.error(f"Erro ao resetar: {e}", exc_info=True)
+        await update.message.reply_text(f"Erro: {e}")
+
+
 async def formatar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Formatando planilha... (pode levar 30 segundos)")
     try:
@@ -661,6 +720,7 @@ def main():
     app.add_handler(CommandHandler("resumo",    resumo_cmd))
     app.add_handler(CommandHandler("ultimas",   ultimas_cmd))
     app.add_handler(CommandHandler("formatar",  formatar_cmd))
+    app.add_handler(CommandHandler("resetar",   resetar_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
