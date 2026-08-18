@@ -7,6 +7,7 @@ Deploy:        Railway (nuvem)
 
 import os
 import json
+import base64
 import logging
 from datetime import datetime
 
@@ -86,12 +87,27 @@ TECLADO_PAGAMENTO = [
 
 
 # ── Google Sheets ─────────────────────────────────────────────────────────────
+def _get_credentials_dict() -> dict:
+    """Lê credenciais do Google — tenta base64 primeiro, depois JSON raw."""
+    # Tenta variável base64 (mais confiável no Railway)
+    b64 = os.environ.get("GOOGLE_CREDENTIALS_B64", "").strip()
+    if b64:
+        try:
+            decoded = base64.b64decode(b64).decode("utf-8")
+            return json.loads(decoded)
+        except Exception as e:
+            logger.warning(f"Falha ao decodificar GOOGLE_CREDENTIALS_B64: {e}")
+
+    # Fallback: JSON raw
+    raw = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    if not raw:
+        raise ValueError("Nenhuma credencial Google configurada! Configure GOOGLE_CREDENTIALS_B64 ou GOOGLE_CREDENTIALS.")
+    return json.loads(raw)
+
+
 def _get_sheet():
-    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
-    if not creds_str:
-        raise ValueError("GOOGLE_CREDENTIALS vazia!")
-    gc          = gspread.service_account_from_dict(json.loads(creds_str))
+    gc          = gspread.service_account_from_dict(_get_credentials_dict())
     spreadsheet = gc.open_by_key(spreadsheet_id)
     try:
         sheet = spreadsheet.worksheet("Registro de Compras")
@@ -183,9 +199,8 @@ def ultimos_registros(n: int = 5) -> str:
 
 def resetar_estrutura():
     """Preserva os dados reais e reconstrói a planilha do zero (sem TOTAL, sem mesclagens)."""
-    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
-    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    gc             = gspread.service_account_from_dict(_get_credentials_dict())
     spreadsheet    = gc.open_by_key(spreadsheet_id)
 
     CABECALHO = ["#", "Data", "Fornecedor", "Material / Produto",
@@ -227,9 +242,8 @@ def resetar_estrutura():
 
 
 def limpar_planilha():
-    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
-    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    gc             = gspread.service_account_from_dict(_get_credentials_dict())
     spreadsheet    = gc.open_by_key(spreadsheet_id)
     try:
         ws = spreadsheet.worksheet("Registro de Compras")
@@ -251,9 +265,8 @@ def limpar_planilha():
 def aplicar_formatacao():
     MAX_DATA = 500   # pré-formata 500 linhas (suficiente para anos de uso)
 
-    creds_str      = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
     spreadsheet_id = os.environ.get("SPREADSHEET_ID", "").strip()
-    gc             = gspread.service_account_from_dict(json.loads(creds_str))
+    gc             = gspread.service_account_from_dict(_get_credentials_dict())
     spreadsheet    = gc.open_by_key(spreadsheet_id)
 
     try:
