@@ -91,17 +91,23 @@ def _get_credentials_dict() -> dict:
     """Lê credenciais do Google — tenta base64 primeiro, depois JSON raw."""
     # Tenta variável base64 (mais confiável no Railway)
     b64 = os.environ.get("GOOGLE_CREDENTIALS_B64", "").strip()
+    logger.info(f"[CREDS] GOOGLE_CREDENTIALS_B64 presente: {bool(b64)} (len={len(b64)})")
     if b64:
         try:
-            decoded = base64.b64decode(b64).decode("utf-8")
-            return json.loads(decoded)
+            decoded = base64.b64decode(b64).decode("utf-8-sig")
+            creds = json.loads(decoded.strip())
+            logger.info("[CREDS] B64 decodificado com sucesso!")
+            return creds
         except Exception as e:
-            logger.warning(f"Falha ao decodificar GOOGLE_CREDENTIALS_B64: {e}")
+            logger.error(f"[CREDS] Falha ao decodificar B64: {e}")
 
     # Fallback: JSON raw
     raw = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    # Remove BOM e caracteres invisíveis do início
+    raw = raw.lstrip("﻿\x00\r\n ").strip()
+    logger.info(f"[CREDS] GOOGLE_CREDENTIALS presente: {bool(raw)} (len={len(raw)}, inicio={repr(raw[:10]) if raw else 'vazio'})")
     if not raw:
-        raise ValueError("Nenhuma credencial Google configurada! Configure GOOGLE_CREDENTIALS_B64 ou GOOGLE_CREDENTIALS.")
+        raise ValueError("Nenhuma credencial Google configurada!")
     return json.loads(raw)
 
 
@@ -485,6 +491,125 @@ def aplicar_formatacao():
 
     criar_resumo("Por Fornecedor", 2, "Fornecedor")
     criar_resumo("Por Material",   3, "Material / Produto")
+
+    # ── Aba Por Mês ───────────────────────────────────────────────────────────
+    def criar_resumo_mes():
+        from collections import defaultdict
+        import datetime as dt
+
+        try:
+            spreadsheet.del_worksheet(spreadsheet.worksheet("Por Mes"))
+        except Exception:
+            pass
+        s = spreadsheet.add_worksheet("Por Mes", rows=100, cols=3)
+
+        NOMES_MES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+                     "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+        # Descobre anos presentes nos dados (+ ano atual)
+        anos = set()
+        anos.add(dt.datetime.now().year)
+        for r in dados:
+            if len(r) > 1 and str(r[1]).strip():
+                try:
+                    anos.add(int(str(r[1]).strip().split("/")[2]))
+                except Exception:
+                    pass
+
+        # Agrupa por mm/yyyy
+        meses_data = defaultdict(lambda: {"qtd": 0, "total": 0.0})
+        for r in dados:
+            if len(r) > 7 and str(r[1]).strip():
+                try:
+                    partes = str(r[1]).strip().split("/")
+                    chave  = (int(partes[2]), int(partes[1]))  # (yyyy, mm)
+                    meses_data[chave]["qtd"]   += 1
+                    meses_data[chave]["total"] += _parse_float(r[7])
+                except Exception:
+                    pass
+
+        # Monta lista completa: todos os meses de cada ano presente
+        todas_linhas = []
+        for ano in sorted(anos):
+            for mm in range(1, 13):
+                chave  = (ano, mm)
+                v      = meses_data.get(chave, {"qtd": 0, "total": 0.0})
+                nome   = f"{NOMES_MES[mm-1]}/{ano}"
+                todas_linhas.append([nome, round(v["total"], 2), v["qtd"]])
+
+        n       = len(todas_linhas)
+        end_row = 3 + n
+
+        # Cabeçalho título
+        s.update("A1:C1", [["RESUMO POR MES"]])
+        s.merge_cells("A1:C1")
+        s.format("A1:C1", {
+            "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 13},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        })
+
+        # Cabeçalho colunas
+        s.update("A2:C2", [["Mês", "Total (R$)", "Nº Lançamentos"]])
+        s.format("A2:C2", {
+            "backgroundColor": {"red": 0.180, "green": 0.459, "blue": 0.710},
+            "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
+            "horizontalAlignment": "CENTER",
+        })
+
+        if todas_linhas:
+            s.update(f"A3:C{end_row - 1}", todas_linhas, value_input_option="USER_ENTERED")
+
+            # Formatação zebra
+            for i in range(n):
+                linha = 3 + i
+                bg = {"red": 0.839, "green": 0.894, "blue": 0.941} if i % 2 == 0 else {"red": 0.922, "green": 0.949, "blue": 0.973}
+                s.format(f"A{linha}:C{linha}", {
+                    "backgroundColor": bg,
+                    "textFormat": {"fontSize": 10},
+                    "verticalAlignment": "MIDDLE",
+                })
+
+            s.format(f"B3:B{end_row - 1}", {
+                "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+                "horizontalAlignment": "RIGHT",
+                "textFormat": {"bold": True},
+            })
+            s.format(f"C3:C{end_row - 1}", {"horizontalAlignment": "CENTER"})
+
+            # Linha TOTAL GERAL
+            total_soma = sum(r[1] for r in todas_linhas)
+            total_qtd  = sum(r[2] for r in todas_linhas)
+            s.update(f"A{end_row}:C{end_row}",
+                     [["TOTAL GERAL", round(total_soma, 2), total_qtd]],
+                     value_input_option="USER_ENTERED")
+            s.format(f"A{end_row}:C{end_row}", {
+                "backgroundColor": {"red": 0.122, "green": 0.220, "blue": 0.392},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 11},
+                "horizontalAlignment": "CENTER",
+            })
+            s.format(f"B{end_row}:B{end_row}", {
+                "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+                "horizontalAlignment": "RIGHT",
+            })
+
+        # Largura colunas e altura cabeçalho
+        sid2 = s.id
+        spreadsheet.batch_update({"requests": [
+            {"updateDimensionProperties": {
+                "range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+                "properties": {"pixelSize": w}, "fields": "pixelSize",
+            }} for i, w in enumerate([160, 160, 140])
+        ] + [
+            {"updateDimensionProperties": {
+                "range": {"sheetId": sid2, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
+                "properties": {"pixelSize": 40}, "fields": "pixelSize",
+            }},
+        ]})
+        s.freeze(rows=2)
+        logger.info(f"[RESUMO] Por Mes: {n} meses")
+
+    criar_resumo_mes()
 
 
 # ── Handlers de comandos ──────────────────────────────────────────────────────
