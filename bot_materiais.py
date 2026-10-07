@@ -737,8 +737,150 @@ def aplicar_formatacao():
 
     criar_resumo_fornecedor()
     time.sleep(5)
-    criar_resumo("Por Material",   3, "Material / Produto")
+    criar_resumo("Por Material", 3, "Material / Produto")
     time.sleep(5)
+
+    # ── Aba Pivot Fornecedor × Mês ────────────────────────────────────────────
+    def criar_pivot_forn_mes():
+        from collections import defaultdict
+        import datetime as dt
+
+        try:
+            spreadsheet.del_worksheet(spreadsheet.worksheet("Forn. x Mes"))
+        except Exception:
+            pass
+        s    = spreadsheet.add_worksheet("Forn. x Mes", rows=200, cols=20)
+        sid2 = s.id
+
+        NOMES_MES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+                     "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+
+        # Fornecedores ordenados por gasto total
+        forn_totais = defaultdict(float)
+        for r in dados:
+            if len(r) > 7 and len(r) > 2 and str(r[2]).strip():
+                forn_totais[r[2]] += _parse_float(r[7])
+        fornecedores = sorted(forn_totais, key=lambda x: forn_totais[x], reverse=True)
+        n_forn       = len(fornecedores)
+
+        # Meses (todos do(s) ano(s) presentes)
+        anos = {dt.datetime.now().year}
+        for r in dados:
+            if len(r) > 1 and str(r[1]).strip():
+                try:
+                    anos.add(int(str(r[1]).strip().split("/")[2]))
+                except Exception:
+                    pass
+        todos_meses = [(ano, mm) for ano in sorted(anos) for mm in range(1, 13)]
+        n_mes       = len(todos_meses)
+
+        # Pivot
+        pivot = defaultdict(lambda: defaultdict(float))
+        for r in dados:
+            if len(r) > 7 and str(r[1]).strip() and str(r[2]).strip():
+                try:
+                    partes = str(r[1]).strip().split("/")
+                    chave  = (int(partes[2]), int(partes[1]))
+                    pivot[chave][r[2]] += _parse_float(r[7])
+                except Exception:
+                    pass
+
+        n_cols = 1 + n_forn + 1   # Mês + fornecedores + TOTAL MÊS
+
+        # ── Escreve dados ─────────────────────────────────────────────────────
+        cab = ["Mês"] + fornecedores + ["TOTAL MÊS"]
+        s.update("A1:A1", [["GASTOS POR MES E FORNECEDOR"]])
+        s.update(f"A2:{chr(64+n_cols)}2", [cab])
+
+        pivot_rows = []
+        for (ano, mm) in todos_meses:
+            nome = f"{NOMES_MES[mm-1]}/{ano}"
+            vals = [round(pivot[(ano, mm)].get(f, 0.0), 2) for f in fornecedores]
+            pivot_rows.append([nome] + vals + [round(sum(vals), 2)])
+
+        if pivot_rows:
+            s.update(f"A3:{chr(64+n_cols)}{2+n_mes}", pivot_rows, value_input_option="USER_ENTERED")
+
+        # Linha TOTAL GERAL
+        tot_row = 3 + n_mes + 1
+        tot_vals = [round(forn_totais.get(f, 0), 2) for f in fornecedores]
+        s.update(f"A{tot_row}:{chr(64+n_cols)}{tot_row}",
+                 [["TOTAL GERAL"] + tot_vals + [round(sum(tot_vals), 2)]],
+                 value_input_option="USER_ENTERED")
+
+        # ── Formatação batch ──────────────────────────────────────────────────
+        reqs = []
+
+        # Título linha 1
+        reqs.append({"mergeCells": {
+            "range": {"sheetId": sid2, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": 0, "endColumnIndex": n_cols},
+            "mergeType": "MERGE_ALL"
+        }})
+        reqs.append(_cell_fmt(sid2, 0, 0, 1, n_cols, {
+            "backgroundColor": _cor(0.122, 0.220, 0.392),
+            "textFormat": {"bold": True, "foregroundColor": _cor(1,1,1), "fontSize": 13},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        }))
+        # Cabeçalho linha 2
+        reqs.append(_cell_fmt(sid2, 1, 0, 2, n_cols, {
+            "backgroundColor": _cor(0.180, 0.459, 0.710),
+            "textFormat": {"bold": True, "foregroundColor": _cor(1,1,1), "fontSize": 11},
+            "horizontalAlignment": "CENTER",
+        }))
+        if pivot_rows:
+            # Dados — fundo claro com zebra
+            reqs.append(_cell_fmt(sid2, 2, 0, 2+n_mes, n_cols, {
+                "backgroundColor": _cor(0.839, 0.894, 0.941),
+                "textFormat": {"fontSize": 10}, "verticalAlignment": "MIDDLE",
+            }))
+            for i in range(1, n_mes, 2):
+                reqs.append(_cell_fmt(sid2, 2+i, 0, 3+i, n_cols, {"backgroundColor": _cor(0.922, 0.949, 0.973)}))
+            # Colunas numéricas (B em diante)
+            reqs.append(_cell_fmt(sid2, 2, 1, 2+n_mes, n_cols, {
+                "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+                "horizontalAlignment": "RIGHT",
+            }))
+            # Última coluna (TOTAL MÊS) em verde
+            reqs.append(_cell_fmt(sid2, 2, n_cols-1, 2+n_mes, n_cols, {
+                "backgroundColor": _cor(0.851, 0.918, 0.827),
+                "textFormat": {"bold": True},
+                "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+                "horizontalAlignment": "RIGHT",
+            }))
+            # Linha TOTAL GERAL
+            tp = tot_row - 1
+            reqs.append(_cell_fmt(sid2, tp, 0, tp+1, n_cols, {
+                "backgroundColor": _cor(0.122, 0.220, 0.392),
+                "textFormat": {"bold": True, "foregroundColor": _cor(1,1,1), "fontSize": 11},
+                "horizontalAlignment": "CENTER",
+            }))
+            reqs.append(_cell_fmt(sid2, tp, 1, tp+1, n_cols, {
+                "numberFormat": {"type": "CURRENCY", "pattern": "R$ #,##0.00"},
+                "horizontalAlignment": "RIGHT",
+            }))
+
+        # Largura: col A = 160px, demais = 140px
+        reqs.append({"updateDimensionProperties": {
+            "range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+            "properties": {"pixelSize": 160}, "fields": "pixelSize",
+        }})
+        for i in range(1, n_cols):
+            reqs.append({"updateDimensionProperties": {
+                "range": {"sheetId": sid2, "dimension": "COLUMNS", "startIndex": i, "endIndex": i+1},
+                "properties": {"pixelSize": 140}, "fields": "pixelSize",
+            }})
+        reqs.append({"updateDimensionProperties": {
+            "range": {"sheetId": sid2, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
+            "properties": {"pixelSize": 40}, "fields": "pixelSize",
+        }})
+
+        spreadsheet.batch_update({"requests": reqs})
+        s.freeze(rows=2)
+        logger.info(f"[RESUMO] Forn. x Mes: {n_forn} fornecedores × {n_mes} meses")
+
+    time.sleep(5)
+    criar_pivot_forn_mes()
 
     # ── Aba Por Mês ───────────────────────────────────────────────────────────
     def criar_resumo_mes():
